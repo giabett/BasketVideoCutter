@@ -18,6 +18,7 @@ class App:
         self.output = tk.StringVar()
         self.before = tk.StringVar(value="5")
         self.after = tk.StringVar(value="11")
+        self.quality = tk.StringVar(value="Alta (CRF 18)")
         self.ffmpeg = tk.StringVar(value=shutil.which("ffmpeg") or "")
         self.status = tk.StringVar(value="Seleziona un video e inserisci i tempi delle azioni.")
         self.busy = False
@@ -48,6 +49,16 @@ class App:
         ttk.Entry(opts, textvariable=self.before, width=6).pack(side="left")
         ttk.Label(opts, text="secondi dopo").pack(side="left", padx=(12, 3))
         ttk.Entry(opts, textvariable=self.after, width=6).pack(side="left")
+
+        quality_row = ttk.Frame(main); quality_row.pack(fill="x", **pad)
+        ttk.Label(quality_row, text="Qualità video:").pack(side="left")
+        self.quality_box = ttk.Combobox(
+            quality_row, textvariable=self.quality, state="readonly", width=25,
+            values=("Standard (CRF 20)", "Alta (CRF 18)", "Massima (CRF 16)")
+        )
+        self.quality_box.pack(side="left", padx=8)
+        ttk.Label(quality_row, text="Più alta = file più grandi e codifica più lenta.",
+                  foreground="#555").pack(side="left", padx=8)
 
         ttk.Label(main, text="Elenco azioni (formato MM:SS numero_giocatore)").pack(anchor="w", pady=(12, 2))
         self.text = tk.Text(main, height=12, font=("Consolas", 11), wrap="none")
@@ -127,15 +138,21 @@ class App:
             if before < 0 or after < 0 or before + after <= 0 or before > 3600 or after > 3600:
                 raise ValueError("I secondi prima/dopo devono essere non negativi e avere una durata totale maggiore di zero.")
             actions = self.parse_actions()
+            quality_profiles = {
+                "Standard (CRF 20)": ("20", "veryfast"),
+                "Alta (CRF 18)": ("18", "medium"),
+                "Massima (CRF 16)": ("16", "slow"),
+            }
+            crf, preset = quality_profiles[self.quality.get()]
             out.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             messagebox.showerror("Controllo dati", str(e)); return
         self.busy = True
         self.go.configure(state="disabled")
         self.progress["maximum"] = len(actions); self.progress["value"] = 0
-        threading.Thread(target=self.process, args=(str(video), str(out), ff, before, after, actions), daemon=True).start()
+        threading.Thread(target=self.process, args=(str(video), str(out), ff, before, after, actions, crf, preset), daemon=True).start()
 
-    def process(self, video, out, ff, before, after, actions):
+    def process(self, video, out, ff, before, after, actions, crf, preset):
         errors = []
         for i, (point, player) in enumerate(actions, 1):
             start = max(0, point-before)
@@ -146,8 +163,8 @@ class App:
             target = str(Path(out) / name)
             cmd = [ff, "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
                    "-i", video, "-t", str(end-start), "-map", "0:v:0", "-map", "0:a?",
-                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                   "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", target]
+                   "-c:v", "libx264", "-preset", preset, "-crf", crf,
+                   "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", target]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
