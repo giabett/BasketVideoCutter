@@ -1,0 +1,25 @@
+BASKET VIDEO CUTTER — CREAZIONE EXE WINDOWS
+
+Questo pacchetto permette di ottenere BasketVideoCutter.exe senza installare Python sul PC dove userai il programma.
+La compilazione viene eseguita dai server Windows di GitHub Actions.
+
+COME OTTENERE L'EXE
+1. Crea un account gratuito su https://github.com/ se non ne hai già uno.
+2. Crea un nuovo repository (New repository), ad esempio BasketVideoCutter.
+3. Carica nel repository TUTTO il contenuto di questa cartella, compresa la cartella nascosta .github.
+4. Apri la scheda Actions del repository.
+5. Attendi il completamento del workflow "Build Windows EXE" (oppure selezionalo e premi Run workflow).
+6. Apri la compilazione completata e scarica l'artifact "BasketVideoCutter-Windows".
+7. Estrai lo ZIP scaricato: troverai BasketVideoCutter.exe.
+
+UTILIZZO
+- Fai doppio clic su BasketVideoCutter.exe.
+- Se FFmpeg non viene trovato, nel programma seleziona ffmpeg.exe tramite il pulsante "Seleziona…" accanto al campo FFmpeg.
+- Per ottenere tagli precisi il programma ricodifica i clip in H.264/AAC.
+- Impostazione iniziale: 5 secondi prima e 11 secondi dopo il riferimento (16 secondi totali).
+- Formato elenco: MM:SS numero_giocatore, ad esempio:
+    08:50 6
+    13:00 20
+
+NOTA PRIVACY
+Il codice viene caricato nel repository GitHub che crei. Se vuoi tenerlo privato, seleziona Private quando crei il repository.
