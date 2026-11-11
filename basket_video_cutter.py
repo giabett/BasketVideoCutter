@@ -18,8 +18,8 @@ class App:
         self.output = tk.StringVar()
         self.before = tk.StringVar(value="5")
         self.after = tk.StringVar(value="11")
-        self.quality = tk.StringVar(value="Alta (CRF 18)")
         self.ffmpeg = tk.StringVar(value=shutil.which("ffmpeg") or "")
+        self.overlay_number = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="Seleziona un video e inserisci i tempi delle azioni.")
         self.busy = False
         self.build()
@@ -49,23 +49,15 @@ class App:
         ttk.Entry(opts, textvariable=self.before, width=6).pack(side="left")
         ttk.Label(opts, text="secondi dopo").pack(side="left", padx=(12, 3))
         ttk.Entry(opts, textvariable=self.after, width=6).pack(side="left")
-
-        quality_row = ttk.Frame(main); quality_row.pack(fill="x", **pad)
-        ttk.Label(quality_row, text="Qualità video:").pack(side="left")
-        self.quality_box = ttk.Combobox(
-            quality_row, textvariable=self.quality, state="readonly", width=25,
-            values=("Standard (CRF 20)", "Alta (CRF 18)", "Massima (CRF 16)")
-        )
-        self.quality_box.pack(side="left", padx=8)
-        ttk.Label(quality_row, text="Più alta = file più grandi e codifica più lenta.",
-                  foreground="#555").pack(side="left", padx=8)
+        ttk.Checkbutton(main, text="Mostra numero giocatore in rosso in alto a destra",
+                        variable=self.overlay_number).pack(anchor="w", padx=12, pady=(2, 4))
 
         ttk.Label(main, text="Elenco azioni (formato MM:SS numero_giocatore)").pack(anchor="w", pady=(12, 2))
         self.text = tk.Text(main, height=12, font=("Consolas", 11), wrap="none")
         self.text.pack(fill="both", expand=True, padx=12)
         self.text.insert("1.0", "01:15 A\n02:20 D\n03:45 A\n10:25 D\n")
 
-        ttk.Label(main, text="Con i valori iniziali, 08:50 6 crea un clip da 08:45 a 09:01. Il numero del giocatore compare nel nome del file.",
+        ttk.Label(main, text="I tagli vengono uniti in un unico video per ciascun giocatore, in ordine cronologico.",
                   foreground="#555", wraplength=760).pack(anchor="w", padx=12, pady=5)
 
         ffrow = ttk.Frame(main); ffrow.pack(fill="x", **pad)
@@ -138,55 +130,115 @@ class App:
             if before < 0 or after < 0 or before + after <= 0 or before > 3600 or after > 3600:
                 raise ValueError("I secondi prima/dopo devono essere non negativi e avere una durata totale maggiore di zero.")
             actions = self.parse_actions()
-            quality_profiles = {
-                "Standard (CRF 20)": ("20", "veryfast"),
-                "Alta (CRF 18)": ("18", "medium"),
-                "Massima (CRF 16)": ("16", "slow"),
-            }
-            crf, preset = quality_profiles[self.quality.get()]
             out.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             messagebox.showerror("Controllo dati", str(e)); return
         self.busy = True
         self.go.configure(state="disabled")
         self.progress["maximum"] = len(actions); self.progress["value"] = 0
-        threading.Thread(target=self.process, args=(str(video), str(out), ff, before, after, actions, crf, preset), daemon=True).start()
+        overlay_number = self.overlay_number.get()
+        threading.Thread(target=self.process,
+                         args=(str(video), str(out), ff, before, after, actions, overlay_number),
+                         daemon=True).start()
 
-    def process(self, video, out, ff, before, after, actions, crf, preset):
+    @staticmethod
+    def escape_drawtext(value):
+        return str(value).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    def process(self, video, out, ff, before, after, actions, overlay_number=True):
         errors = []
+        out_path = Path(out)
+        temp_dir = out_path / "_temp_tagli"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        grouped = {}
+
+        # Crea prima i singoli segmenti temporanei, già con il numero in sovraimpressione.
         for i, (point, player) in enumerate(actions, 1):
             start = max(0, point-before)
             end = point+after
             if end <= start:
-                errors.append(f"Azione {i}: intervallo non valido"); continue
+                errors.append(f"Azione {i}: intervallo non valido")
+                self.root.after(0, self.update_progress, i, len(actions), f"Azione {i} non valida")
+                continue
+
             name = f"{i:03d}_G{player}_{point//60:02d}-{point%60:02d}.mp4"
-            target = str(Path(out) / name)
+            temp_target = temp_dir / name
             cmd = [ff, "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
-                   "-i", video, "-t", str(end-start), "-map", "0:v:0", "-map", "0:a?",
-                   "-c:v", "libx264", "-preset", preset, "-crf", crf,
-                   "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", target]
+                   "-i", video, "-t", str(end-start), "-map", "0:v:0", "-map", "0:a?"]
+
+            if overlay_number:
+                fontfile = "C\\:/Windows/Fonts/arialbd.ttf"
+                label = self.escape_drawtext(player)
+                drawtext = (
+                    f"drawtext=fontfile='{fontfile}':text='{label}':"
+                    "fontcolor=red:fontsize=h*0.12:"
+                    "x=w-text_w-40:y=40"
+                )
+                cmd += ["-vf", drawtext]
+
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(temp_target)]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
                     errors.append(f"{name}: {result.stderr.strip()[-500:]}")
+                elif temp_target.is_file() and temp_target.stat().st_size > 0:
+                    grouped.setdefault(player, []).append((point, temp_target))
             except Exception as e:
                 errors.append(f"{name}: {e}")
+
             self.root.after(0, self.update_progress, i, len(actions), name)
-        self.root.after(0, self.finish, errors, out)
+
+        # Unisce tutti i segmenti dello stesso giocatore in un unico MP4.
+        created = []
+        for player, clips in sorted(grouped.items(), key=lambda item: str(item[0])):
+            clips.sort(key=lambda item: item[0])  # ordine cronologico
+            list_file = temp_dir / f"lista_G{player}.txt"
+            final_file = out_path / f"Giocatore_{player}.mp4"
+            try:
+                with list_file.open("w", encoding="utf-8", newline="\n") as f:
+                    for _, clip in clips:
+                        escaped = str(clip.resolve()).replace("\\", "/").replace("'", r"'\''")
+                        f.write(f"file '{escaped}'\n")
+
+                join_cmd = [ff, "-hide_banner", "-loglevel", "error", "-y",
+                            "-f", "concat", "-safe", "0", "-i", str(list_file),
+                            "-c", "copy", "-movflags", "+faststart", str(final_file)]
+                result = subprocess.run(join_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    errors.append(f"Giocatore {player}: {result.stderr.strip()[-500:]}")
+                elif final_file.is_file() and final_file.stat().st_size > 0:
+                    created.append(final_file.name)
+            except Exception as e:
+                errors.append(f"Giocatore {player}: {e}")
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        self.root.after(0, self.finish, errors, out, created)
 
     def update_progress(self, value, total, name):
         self.progress["value"] = value
         self.status.set(f"Elaborazione {value}/{total}: {name}")
 
-    def finish(self, errors, out):
+    def finish(self, errors, out, created):
         self.busy = False
         self.go.configure(state="normal")
+        summary = f"File giocatore creati: {len(created)}"
         if errors:
             self.status.set(f"Completato con {len(errors)} errore/i. Controlla il messaggio.")
-            messagebox.showwarning("Elaborazione terminata", f"Cartella: {out}\n\nErrori:\n" + "\n".join(errors[:8]))
+            messagebox.showwarning(
+                "Elaborazione terminata",
+                f"{summary}\n\nCartella: {out}\n\nFile:\n" +
+                ("\n".join(created) if created else "Nessun file creato") +
+                "\n\nErrori:\n" + "\n".join(errors[:8])
+            )
         else:
-            self.status.set(f"Completato: {int(self.progress['value'])} clip creati in {out}")
-            messagebox.showinfo("Fatto!", f"Tutti i tagli sono stati creati.\n\nCartella:\n{out}")
+            self.status.set(f"Completato: {len(created)} file, uno per giocatore, in {out}")
+            messagebox.showinfo(
+                "Fatto!",
+                f"Creati {len(created)} file, uno per ogni giocatore.\n\n" +
+                ("\n".join(created) if created else "Nessun file creato") +
+                f"\n\nCartella:\n{out}"
+            )
 
 if __name__ == "__main__":
     root = tk.Tk()
